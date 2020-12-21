@@ -1,6 +1,6 @@
 const uuid = require('uuid/v4');
 
-class RefreshScheduler {
+export class RefreshScheduler {
   constructor(serverCore) {
     this.serverCore = serverCore;
   }
@@ -172,5 +172,3 @@ class RefreshScheduler {
     }));
   }
 }
-
-module.exports = RefreshScheduler;
