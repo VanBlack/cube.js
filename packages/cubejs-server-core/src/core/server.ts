@@ -6,7 +6,14 @@ import LRUCache from 'lru-cache';
 import isDocker from 'is-docker';
 
 import { ApiGateway } from '@cubejs-backend/api-gateway';
-import { getAnonymousId, getEnv, internalExceptions, track } from '@cubejs-backend/shared';
+import {
+  CancelableInterval,
+  createCancelableInterval,
+  getAnonymousId,
+  getEnv,
+  internalExceptions,
+  track,
+} from '@cubejs-backend/shared';
 import type { Application as ExpressApplication } from 'express';
 import type { BaseDriver } from '@cubejs-backend/query-orchestrator';
 import type {
@@ -98,7 +105,9 @@ export class CubejsServerCore {
 
   protected readonly standalone: boolean;
 
-  protected scheduledRefreshTimerInterval: NodeJS.Timeout|undefined;
+  protected maxCompilerCacheKeep: NodeJS.Timeout|null = null;
+
+  protected scheduledRefreshTimerInterval: CancelableInterval|null = null;
 
   protected driver: BaseDriver|null = null;
 
@@ -204,14 +213,14 @@ export class CubejsServerCore {
 
     // proactively free up old cache values occassionally
     if (options.maxCompilerCacheKeepAlive) {
-      setInterval(() => this.compilerCache.prune(), options.maxCompilerCacheKeepAlive);
+      this.maxCompilerCacheKeep = setInterval(() => this.compilerCache.prune(), options.maxCompilerCacheKeepAlive);
     }
 
     const scheduledRefreshTimer = this.detectScheduledRefreshTimer(
       options.scheduledRefreshTimer || getEnv('refreshTimer') || getEnv('scheduledRefresh')
     );
     if (scheduledRefreshTimer) {
-      this.scheduledRefreshTimerInterval = setInterval(
+      this.scheduledRefreshTimerInterval = createCancelableInterval(
         async () => {
           const contexts = await options.scheduledRefreshContexts();
           if (contexts.length < 1) {
@@ -589,9 +598,27 @@ export class CubejsServerCore {
   public async releaseConnections() {
     await this.orchestratorStorage.releaseConnections();
 
-    if (this.scheduledRefreshTimerInterval) {
-      clearInterval(this.scheduledRefreshTimerInterval);
+    if (this.maxCompilerCacheKeep) {
+      clearInterval(this.maxCompilerCacheKeep);
     }
+
+    if (this.scheduledRefreshTimerInterval) {
+      await this.scheduledRefreshTimerInterval.cancel();
+    }
+  }
+
+  public async beforeShutdown() {
+    if (this.maxCompilerCacheKeep) {
+      clearInterval(this.maxCompilerCacheKeep);
+    }
+
+    if (this.scheduledRefreshTimerInterval) {
+      await this.scheduledRefreshTimerInterval.cancel();
+    }
+  }
+
+  public async shutdown() {
+    return this.orchestratorStorage.releaseConnections();
   }
 
   public static version() {
